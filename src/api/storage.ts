@@ -22,8 +22,10 @@ export async function readFileBuffer(fileId: string, ctx: StorageContext): Promi
         accountability: ctx.accountability,
     });
 
-    // No transformation — we want the original file bytes.
-    const { stream } = await assets.getAsset(fileId, {});
+    // No transformation — we want the original file bytes. AssetsService.getAsset
+    // destructures `transformationParams` from this object (resolvePreset), so it
+    // must be present even when empty, otherwise it throws on `.transforms`.
+    const { stream } = await assets.getAsset(fileId, { transformationParams: {} });
 
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
