@@ -78,6 +78,36 @@ function normalizeValue(value: any): any {
     return value;
 }
 
+const NUMERIC_FIELD_TYPES = ['integer', 'bigInteger', 'float', 'decimal'];
+
+/**
+ * Coerce a string value into a number for numeric target fields, handling the
+ * European decimal convention (comma as decimal separator, space/dot as
+ * thousands separator). Integer fields are rounded to the nearest whole number.
+ * Non-numeric / unparseable values are returned unchanged so Directus can
+ * validate them as usual.
+ */
+function coerceNumericValue(value: any, fieldType: string | undefined): any {
+    if (typeof value !== 'string' || !fieldType) return value;
+    if (!NUMERIC_FIELD_TYPES.includes(fieldType)) return value;
+
+    let cleaned = value.trim().replace(/[\s ]/g, '');
+    if (cleaned === '') return value;
+
+    // If a comma is present, treat it as the decimal separator and drop dots
+    // (thousands separators); otherwise assume dot is already the decimal sep.
+    if (cleaned.includes(',')) {
+        cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+    }
+
+    if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return value; // not a plain number
+    const num = Number(cleaned);
+    if (Number.isNaN(num)) return value;
+
+    if (fieldType === 'integer' || fieldType === 'bigInteger') return Math.round(num);
+    return num;
+}
+
 async function uploadImageFromUrl(
     url: string,
     filesService: any,
@@ -302,6 +332,16 @@ export async function runImport(
     const isDryRun = options.dry_run === true;
     const total = data.length;
 
+    // Build a field -> type lookup from the collection schema so we can coerce
+    // numeric values (European decimals, integer rounding) before insert.
+    const fieldTypes: Record<string, string> = {};
+    const collectionSchema = services?.schema?.collections?.[options.collection];
+    if (collectionSchema?.fields) {
+        for (const [fieldName, fieldDef] of Object.entries(collectionSchema.fields)) {
+            fieldTypes[fieldName] = (fieldDef as any)?.type;
+        }
+    }
+
     for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
         const row = data[rowIndex];
         let transformedRow: Record<string, any> = {};
@@ -340,7 +380,7 @@ export async function runImport(
                     }
                     current[parts[parts.length - 1]] = value;
                 } else {
-                    transformedRow[targetField] = value;
+                    transformedRow[targetField] = coerceNumericValue(value, fieldTypes[targetField]);
                 }
             }
 
