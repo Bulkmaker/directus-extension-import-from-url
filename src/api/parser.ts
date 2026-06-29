@@ -1,5 +1,8 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import iconv from 'iconv-lite';
+
+export type Encoding = 'auto' | 'utf-8' | 'windows-1251';
 
 export interface ParseResult {
     headers: string[];
@@ -8,80 +11,123 @@ export interface ParseResult {
     currentSheet?: string;
 }
 
-export function parseData(data: string | Buffer, options: { delimiter?: string; hasHeader?: boolean; sheetName?: string } = {}): ParseResult {
-    // If data is a Buffer, try to parse as Excel
+export interface ParseOptions {
+    delimiter?: string;
+    hasHeader?: boolean;
+    sheetName?: string;
+    encoding?: Encoding;
+}
+
+/**
+ * Detect a real binary spreadsheet by its magic bytes.
+ * Without this check we used to feed *every* buffer (including plain CSV/TSV
+ * text) into XLSX.read(), which silently decodes text as latin1 — mangling
+ * any Cyrillic / non-ASCII content unless the file happened to carry a UTF-8 BOM.
+ *
+ *   - XLSX / XLSB (ZIP container): "PK\x03\x04" (also \x05\x06, \x07\x08)
+ *   - XLS (OLE2 compound file):    D0 CF 11 E0 A1 B1 1A E1
+ */
+function isSpreadsheet(buf: Buffer): boolean {
+    if (buf.length < 8) return false;
+    if (buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07)) {
+        return true; // ZIP-based (xlsx/xlsb)
+    }
+    if (buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11 && buf[3] === 0xe0) {
+        return true; // OLE2-based (legacy xls)
+    }
+    return false;
+}
+
+/**
+ * Decode a text buffer (CSV/TSV) into a string with proper charset handling.
+ *
+ * Order of resolution:
+ *   1. BOM (UTF-8 / UTF-16 LE / UTF-16 BE) — always authoritative.
+ *   2. Explicit `encoding` override ('utf-8' | 'windows-1251').
+ *   3. 'auto' — try UTF-8; if it produces replacement chars (U+FFFD) the bytes
+ *      are not valid UTF-8, so fall back to Windows-1251 (the de-facto default
+ *      for Russian CSVs exported from Excel on Windows).
+ */
+function decodeBuffer(buf: Buffer, encoding: Encoding = 'auto'): string {
+    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+        return buf.subarray(3).toString('utf-8'); // UTF-8 BOM
+    }
+    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+        return buf.subarray(2).toString('utf16le'); // UTF-16 LE BOM
+    }
+    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+        return iconv.decode(buf.subarray(2), 'utf-16be'); // UTF-16 BE BOM
+    }
+
+    if (encoding === 'windows-1251') return iconv.decode(buf, 'win1251');
+    if (encoding === 'utf-8') return buf.toString('utf-8');
+
+    // auto-detect
+    const utf8 = buf.toString('utf-8');
+    if (utf8.includes('�')) {
+        return iconv.decode(buf, 'win1251');
+    }
+    return utf8;
+}
+
+export function parseData(data: string | Buffer, options: ParseOptions = {}): ParseResult {
     if (Buffer.isBuffer(data)) {
-        try {
-            const workbook = XLSX.read(data, { type: 'buffer' });
-            const sheetNames = workbook.SheetNames;
+        // Only attempt Excel parsing for actual spreadsheet binaries.
+        if (isSpreadsheet(data)) {
+            try {
+                const workbook = XLSX.read(data, { type: 'buffer' });
+                const sheetNames = workbook.SheetNames;
 
-            if (sheetNames.length === 0) {
-                throw new Error('No sheets found in Excel file');
+                if (sheetNames.length === 0) {
+                    throw new Error('No sheets found in Excel file');
+                }
+
+                const targetSheet = options.sheetName && sheetNames.includes(options.sheetName)
+                    ? options.sheetName
+                    : sheetNames[0];
+
+                const worksheet = workbook.Sheets[targetSheet];
+
+                const rows: any[] = XLSX.utils.sheet_to_json(worksheet, {
+                    header: options.hasHeader === false ? 1 : undefined // 1 = array of arrays (no keys)
+                });
+
+                let headers: string[] = [];
+                if (rows.length > 0 && !Array.isArray(rows[0])) {
+                    headers = Object.keys(rows[0]);
+                }
+
+                return {
+                    headers,
+                    rows,
+                    sheets: sheetNames,
+                    currentSheet: targetSheet
+                };
+            } catch (error) {
+                // Malformed/edge-case spreadsheet — fall back to text decoding.
+                return parseCsv(decodeBuffer(data, options.encoding), options);
             }
-
-            // Use specified sheet or default to the first one
-            const targetSheet = options.sheetName && sheetNames.includes(options.sheetName)
-                ? options.sheetName
-                : sheetNames[0];
-
-            const worksheet = workbook.Sheets[targetSheet];
-
-            // Allow parsing without header, but typically Excel has headers. 
-            // json conversion uses header: row 1 by default if not specified? 
-            // sheet_to_json default treats first row as header.
-            // If hasHeader is false, we should probably set header: 1 to get array of arrays?
-            // But our system expects array of objects.
-            // Let's stick to standard behavior: if hasHeader, first row is keys.
-
-            const rows: any[] = XLSX.utils.sheet_to_json(worksheet, {
-                header: options.hasHeader === false ? 1 : undefined // 1 = array of arrays (no keys)
-            });
-
-            // If header is false, rows are arrays. We might need to map them to objects if we want consistency?
-            // But existing 'papaparse' logic with header:false returns array of arrays (I think).
-            // Actually PapaParse with header:true returns objects used by keys.
-            // Let's extract headers from the first row if we used header detection.
-
-            let headers: string[] = [];
-            if (rows.length > 0 && !Array.isArray(rows[0])) {
-                headers = Object.keys(rows[0]);
-            } else if (rows.length > 0 && Array.isArray(rows[0])) {
-                // If it's array of arrays, we generate headers? Or just return as is?
-                // The current system relies on 'headers' array for mapping UI.
-                // If imports are array of arrays (no header), keys are indices '0', '1', etc.
-            }
-
-            return {
-                headers,
-                rows,
-                sheets: sheetNames,
-                currentSheet: targetSheet
-            };
-
-        } catch (error) {
-            // If Excel parsing fails (e.g. it's actually a CSV in a buffer), fallback to text decoding
-            // console.warn('Excel parse failed, trying CSV:', error);
-            const text = data.toString('utf-8');
-            return parseCsv(text, options);
         }
+
+        // Plain text source (CSV/TSV) — decode with charset detection.
+        return parseCsv(decodeBuffer(data, options.encoding), options);
     }
 
     // If string, parse as CSV
     return parseCsv(data, options);
 }
 
-function parseCsv(data: string, options: { delimiter?: string; hasHeader?: boolean }): ParseResult {
+function parseCsv(data: string, options: ParseOptions): ParseResult {
     const config: Papa.ParseConfig = {
         header: options.hasHeader ?? true,
         skipEmptyLines: true,
         delimiter: options.delimiter === 'auto' ? undefined : options.delimiter,
     };
 
-    // Auto-detect tab for TSV if not specified
+    // Auto-detect delimiter (comma / semicolon / tab) when not explicitly set.
     if (!options.delimiter || options.delimiter === 'auto') {
-        if (data.includes('\t') && !data.includes(',')) {
-            config.delimiter = '\t';
-        }
+        const detected = detectDelimiter(data);
+        if (detected) config.delimiter = detected;
     }
 
     const result = Papa.parse(data, config);
@@ -94,4 +140,20 @@ function parseCsv(data: string, options: { delimiter?: string; hasHeader?: boole
         headers: result.meta.fields || [],
         rows: result.data as any[],
     };
+}
+
+/**
+ * Pick the most likely delimiter by counting candidates on the header line.
+ * Russian Excel exports frequently use ';', and TSV uses tabs — PapaParse's
+ * own guesser is not always reliable for these, so we bias it explicitly.
+ */
+function detectDelimiter(data: string): string | undefined {
+    const firstLine = data.split(/\r?\n/, 1)[0] || '';
+    const candidates: Array<[string, number]> = [
+        ['\t', (firstLine.match(/\t/g) || []).length],
+        [';', (firstLine.match(/;/g) || []).length],
+        [',', (firstLine.match(/,/g) || []).length],
+    ];
+    candidates.sort((a, b) => b[1] - a[1]);
+    return candidates[0][1] > 0 ? candidates[0][0] : undefined;
 }

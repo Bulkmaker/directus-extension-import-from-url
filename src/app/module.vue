@@ -62,17 +62,40 @@
 				<v-card v-if="step === 1">
 					<v-card-text>
 						<div class="field-group mb-20">
+							<label class="type-label">{{ t('source_type') }}</label>
+							<v-select v-model="form.source_type" :items="sourceTypeItems" />
+						</div>
+
+						<div v-if="form.source_type === 'url'" class="field-group mb-20">
 							<label class="type-label">{{ t('source_url') }}</label>
 							<v-input v-model="form.url" placeholder="https://docs.google.com/spreadsheets/d/..." />
 							<div class="type-note">{{ t('source_url_note') }}</div>
 						</div>
 
+						<div v-else class="field-group mb-20">
+							<label class="type-label">{{ t('source_file') }}</label>
+							<div class="file-upload">
+								<input
+									id="import-file-input"
+									type="file"
+									accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+									@change="uploadFile"
+									style="display: none;"
+								/>
+								<v-button :loading="uploadingFile" @click="triggerFilePicker">
+									{{ t('choose_file') }}
+								</v-button>
+								<span v-if="uploadedFileName" class="file-name">{{ uploadedFileName }}</span>
+							</div>
+							<div class="type-note">{{ t('source_file_note') }}</div>
+						</div>
+
 						<div class="grid mb-20" style="--theme--form--field--input--height: 60px;">
 							<div class="field-group">
 								<label class="type-label">{{ t('target_collection') }}</label>
-								<v-select 
-									v-model="form.collection" 
-									:items="collectionItems" 
+								<v-select
+									v-model="form.collection"
+									:items="collectionItems"
 									:placeholder="t('select_collection')"
 								/>
 							</div>
@@ -82,10 +105,18 @@
 							</div>
 						</div>
 
+						<div class="grid mb-20" style="--theme--form--field--input--height: 60px;">
+							<div class="field-group">
+								<label class="type-label">{{ t('encoding') }}</label>
+								<v-select v-model="form.encoding" :items="encodingItems" />
+								<div class="type-note">{{ t('encoding_note') }}</div>
+							</div>
+						</div>
+
 						<div class="mb-20">
 							<v-checkbox v-model="form.has_header" :label="t('has_header')" />
 						</div>
-						<v-button @click="fetchPreview" :loading="loading" :disabled="!form.url || !form.collection" class="mt-20">{{ t('continue_preview') }}</v-button>
+						<v-button @click="fetchPreview" :loading="loading" :disabled="(form.source_type === 'url' ? !form.url : !form.file_id) || !form.collection" class="mt-20">{{ t('continue_preview') }}</v-button>
 					</v-card-text>
 				</v-card>
 
@@ -596,8 +627,18 @@ const locales = {
 		edit: 'Edit',
 		delete: 'Delete',
 		run_now: 'Run Now',
+		source_type: 'Source',
+		source_type_url: 'URL / Google Sheets',
+		source_type_file: 'Upload file',
 		source_url: 'Source URL',
 		source_url_note: 'Must be a published Google Sheets link (File > Share > Publish to web) or a direct CSV/TSV URL.',
+		source_file: 'File',
+		source_file_note: 'CSV, TSV or Excel (.xlsx/.xls). Max 50 MB.',
+		choose_file: 'Choose file…',
+		file_uploaded: 'File uploaded',
+		error_uploading: 'Error uploading file',
+		encoding: 'Encoding',
+		encoding_note: 'Auto-detects UTF-8 / Windows-1251. Override if text looks garbled.',
 		target_collection: 'Target Collection',
 		select_collection: 'Select collection...',
 		delimiter: 'Delimiter',
@@ -704,8 +745,18 @@ const locales = {
 		edit: 'Редактировать',
 		delete: 'Удалить',
 		run_now: 'Запустить',
+		source_type: 'Источник',
+		source_type_url: 'Ссылка / Google Sheets',
+		source_type_file: 'Загрузить файл',
 		source_url: 'URL источника',
 		source_url_note: 'Должна быть опубликованная ссылка Google Sheets (Файл > Поделиться > Опубликовать в интернете) или прямая ссылка на CSV/TSV.',
+		source_file: 'Файл',
+		source_file_note: 'CSV, TSV или Excel (.xlsx/.xls). До 50 МБ.',
+		choose_file: 'Выбрать файл…',
+		file_uploaded: 'Файл загружен',
+		error_uploading: 'Ошибка загрузки файла',
+		encoding: 'Кодировка',
+		encoding_note: 'Автоопределение UTF-8 / Windows-1251. Измените вручную, если текст отображается некорректно.',
 		target_collection: 'Целевая коллекция',
 		select_collection: 'Выберите коллекцию...',
 		delimiter: 'Разделитель',
@@ -902,6 +953,48 @@ const delimiterItems = [
 	{ text: 'Tab', value: '\t' }
 ];
 
+const sourceTypeItems = computed(() => [
+	{ text: t('source_type_url'), value: 'url' },
+	{ text: t('source_type_file'), value: 'file' }
+]);
+
+const encodingItems = [
+	{ text: 'Auto', value: 'auto' },
+	{ text: 'UTF-8', value: 'utf-8' },
+	{ text: 'Windows-1251', value: 'windows-1251' }
+];
+
+// Display name of the uploaded file (transient, not persisted in the profile)
+const uploadedFileName = ref('');
+const uploadingFile = ref(false);
+
+function triggerFilePicker() {
+	document.getElementById('import-file-input')?.click();
+}
+
+async function uploadFile(event) {
+	const file = event?.target?.files?.[0];
+	if (!file) return;
+	uploadingFile.value = true;
+	try {
+		const formData = new FormData();
+		formData.append('title', file.name);
+		formData.append('file', file);
+		const resp = await api.post('/files', formData, {
+			headers: { 'Content-Type': 'multipart/form-data' }
+		});
+		form.value.file_id = resp.data.data.id;
+		uploadedFileName.value = file.name;
+		notifications.add({ title: t('file_uploaded'), text: file.name, type: 'success' });
+	} catch (e) {
+		notifications.add({ title: t('error_uploading'), text: e.message, type: 'error' });
+		console.error(e);
+	} finally {
+		uploadingFile.value = false;
+		if (event?.target) event.target.value = ''; // allow re-selecting the same file
+	}
+}
+
 const modeItems = [
 	{ text: 'Insert', value: 'insert' },
 	{ text: 'Upsert (Update if exists)', value: 'upsert' }
@@ -925,7 +1018,10 @@ const sheetItems = computed(() => {
 
 const form = ref({
 	collection: '',
+	source_type: 'url',
 	url: '',
+	file_id: null,
+	encoding: 'auto',
 	name: '',
 	delimiter: 'auto',
 	has_header: true,
@@ -1080,7 +1176,10 @@ async function fetchPreview() {
 	loading.value = true;
 	try {
 		const resp = await api.post('/import-from-url/preview', {
+			source_type: form.value.source_type,
 			url: form.value.url,
+			file_id: form.value.file_id,
+			encoding: form.value.encoding,
 			delimiter: form.value.delimiter,
 			has_header: form.value.has_header,
 			sheet_name: form.value.sheet_name
@@ -1124,7 +1223,10 @@ function getProfilePayload() {
 	return {
 		name: form.value.name || `Import ${form.value.collection} ${new Date().toLocaleString()}`,
 		collection: form.value.collection,
+		source_type: form.value.source_type,
 		url: form.value.url,
+		file_id: form.value.file_id,
+		encoding: form.value.encoding,
 		mapping: form.value.mapping,
 		mode: form.value.mode,
 		match_field: form.value.match_field,
@@ -1228,7 +1330,10 @@ async function startDryRun() {
 	try {
 		const payload = {
 			collection: form.value.collection,
+			source_type: form.value.source_type,
 			url: form.value.url,
+			file_id: form.value.file_id,
+			encoding: form.value.encoding,
 			mapping: form.value.mapping,
 			mode: form.value.mode,
 			match_field: form.value.match_field,
@@ -1329,7 +1434,10 @@ function editProfile(profile) {
 	form.value = {
 		name: profile.name,
 		collection: profile.collection,
+		source_type: profile.source_type || 'url',
 		url: profile.url,
+		file_id: profile.file_id || null,
+		encoding: profile.encoding || 'auto',
 		delimiter: profile.delimiter || 'auto',
 		has_header: profile.has_header !== false,
 		sheet_name: profile.sheet_name || '',
@@ -1342,6 +1450,15 @@ function editProfile(profile) {
 		defaults: profile.defaults || {},
 		gallery_options: profile.gallery_options || { delimiter: ',', folder: null, skip_errors: true, mode: 'replace', base_url: '' }
 	};
+
+	// Restore uploaded file name for display (file-based profiles)
+	uploadedFileName.value = '';
+	if (profile.source_type === 'file' && profile.file_id) {
+		api.get(`/files/${profile.file_id}?fields=title,filename_download`)
+			.then((r) => { uploadedFileName.value = r.data.data.title || r.data.data.filename_download || ''; })
+			.catch(() => {});
+	}
+
 	activeTab.value = 'import';
 	step.value = 1;
 }
@@ -1450,7 +1567,10 @@ function reset() {
 	form.value = {
 		name: '',
 		collection: '',
+		source_type: 'url',
 		url: '',
+		file_id: null,
+		encoding: 'auto',
 		delimiter: 'auto',
 		has_header: true,
 		sheet_name: '',
@@ -1463,6 +1583,7 @@ function reset() {
 		defaults: {},
 		gallery_options: { ...galleryDefaults.value, folder: null }
 	};
+	uploadedFileName.value = '';
 	previewData.value = { headers: [], preview: [], sheets: [], current_sheet: '' };
 	targetFields.value = [];
 	galleryGridFields.value = {};
@@ -1538,6 +1659,15 @@ function reset() {
 	line-height: 1.4;
 }
 .preview-table tr:last-child td { border-bottom: none; }
+
+/* File upload */
+.file-upload { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.file-name {
+	font-size: 0.9rem;
+	color: var(--theme--foreground);
+	font-weight: 600;
+	word-break: break-all;
+}
 
 /* Mapping Grid */
 .mapping-grid { display: flex; flex-direction: column; gap: 12px; }

@@ -1,10 +1,32 @@
 import { defineEndpoint } from '@directus/extensions-sdk';
 import { fetchData } from './fetcher';
 import { parseData } from './parser';
+import { readFileBuffer } from './storage';
 import { runImport } from './importer';
 
 export default defineEndpoint((router, { services, database }) => {
     const { ItemsService, FilesService } = services;
+
+    /**
+     * Resolve the raw source bytes from either a remote URL or an uploaded
+     * Directus file. `source_type === 'file'` + `file_id` reads from storage;
+     * everything else falls back to the URL fetcher.
+     */
+    const getSourceData = async (
+        source: { source_type?: string; url?: string; file_id?: string },
+        req: any
+    ): Promise<string | Buffer> => {
+        if (source.source_type === 'file' && source.file_id) {
+            return await readFileBuffer(source.file_id, {
+                services,
+                schema: req.schema,
+                accountability: req.accountability,
+            });
+        }
+        if (!source.url) throw new Error('URL or uploaded file is required');
+        const { data } = await fetchData(source.url);
+        return data;
+    };
 
     // Auto-install: Check if tables exist, if not create them
     const install = async () => {
@@ -18,6 +40,7 @@ export default defineEndpoint((router, { services, database }) => {
                     table.boolean('enabled').defaultTo(true);
                     table.string('source_type').defaultTo('url');
                     table.text('url');
+                    table.uuid('file_id');
                     table.string('format').defaultTo('auto');
                     table.string('delimiter').defaultTo('auto');
                     table.boolean('has_header').defaultTo(true);
@@ -88,6 +111,27 @@ export default defineEndpoint((router, { services, database }) => {
                         table.json('gallery_fields');
                     });
                 }
+
+                const hasSourceType = await database.schema.hasColumn('directus_import_profiles', 'source_type');
+                if (!hasSourceType) {
+                    await database.schema.table('directus_import_profiles', (table) => {
+                        table.string('source_type').defaultTo('url');
+                    });
+                }
+
+                const hasEncoding = await database.schema.hasColumn('directus_import_profiles', 'encoding');
+                if (!hasEncoding) {
+                    await database.schema.table('directus_import_profiles', (table) => {
+                        table.string('encoding').defaultTo('auto');
+                    });
+                }
+
+                const hasFileId = await database.schema.hasColumn('directus_import_profiles', 'file_id');
+                if (!hasFileId) {
+                    await database.schema.table('directus_import_profiles', (table) => {
+                        table.uuid('file_id');
+                    });
+                }
             }
 
             const hasJobs = await database.schema.hasTable('directus_import_jobs');
@@ -136,14 +180,14 @@ export default defineEndpoint((router, { services, database }) => {
     // Preview from URL
     router.post('/preview', async (req, res, next) => {
         try {
-            const { url, delimiter, has_header, sheet_name } = req.body;
-            if (!url) throw new Error('URL is required');
+            const { url, delimiter, has_header, sheet_name, encoding, source_type, file_id } = req.body;
 
-            const { data } = await fetchData(url);
+            const data = await getSourceData({ source_type, url, file_id }, req);
             const result = parseData(data, {
                 delimiter,
                 hasHeader: has_header,
-                sheetName: sheet_name
+                sheetName: sheet_name,
+                encoding
             });
 
             res.json({
@@ -174,16 +218,17 @@ export default defineEndpoint((router, { services, database }) => {
             const {
                 collection, url, mapping, mode, match_field, match_source,
                 skip_empty_values, force_publish, defaults, delimiter, has_header, sheet_name, dry_run,
-                gallery_options, gallery_fields
+                gallery_options, gallery_fields, encoding, source_type, file_id
             } = req.body;
 
             const service = new ItemsService(collection, { schema: (req as any).schema, accountability: (req as any).accountability });
-            const { data } = await fetchData(url);
+            const data = await getSourceData({ source_type, url, file_id }, req);
 
             const parsed = parseData(data, {
                 delimiter,
                 hasHeader: has_header,
-                sheetName: sheet_name
+                sheetName: sheet_name,
+                encoding
             });
 
             const onProgress = useSSE ? (progress: any) => {
@@ -242,11 +287,15 @@ export default defineEndpoint((router, { services, database }) => {
             const profile = await profilesService.readOne(profileId);
             if (!profile) throw new Error(`Profile ${profileId} not found`);
 
-            const { data } = await fetchData(profile.url);
+            const data = await getSourceData(
+                { source_type: profile.source_type, url: profile.url, file_id: profile.file_id },
+                req
+            );
             const parsed = parseData(data, {
                 delimiter: profile.delimiter,
                 hasHeader: profile.has_header,
-                sheetName: profile.sheet_name
+                sheetName: profile.sheet_name,
+                encoding: profile.encoding
             });
 
             const targetService = new ItemsService(profile.collection, { schema: (req as any).schema, accountability: (req as any).accountability });
