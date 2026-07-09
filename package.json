@@ -1,65 +1,64 @@
 {
-    "name": "directus-extension-import-from-url",
-    "version": "1.0.0",
-    "description": "Import data directly from CSV, TSV, Excel or Google Sheets URLs into Directus collections.",
-    "icon": "import_export",
-    "keywords": [
-        "directus",
-        "directus-extension",
-        "import",
-        "csv",
-        "tsv",
-        "xlsx",
-        "excel",
-        "google-sheets",
-        "data-import"
+  "name": "directus-extension-import-from-url",
+  "version": "1.0.1",
+  "description": "Import data directly from CSV, TSV, Excel or Google Sheets URLs into Directus collections.",
+  "icon": "import_export",
+  "keywords": [
+    "directus",
+    "directus-extension",
+    "import",
+    "csv",
+    "tsv",
+    "xlsx",
+    "excel",
+    "google-sheets",
+    "data-import"
+  ],
+  "author": "Miša <ibull37@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bulkmaker/directus-extension-import-from-url"
+  },
+  "homepage": "https://github.com/bulkmaker/directus-extension-import-from-url#readme",
+  "bugs": {
+    "url": "https://github.com/bulkmaker/directus-extension-import-from-url/issues"
+  },
+  "type": "module",
+  "directus:extension": {
+    "type": "bundle",
+    "path": {
+      "app": "dist/app.js",
+      "api": "dist/api.js"
+    },
+    "entries": [
+      {
+        "type": "endpoint",
+        "name": "import-from-url",
+        "source": "src/api/index.ts"
+      },
+      {
+        "type": "module",
+        "name": "import-module",
+        "source": "src/app/index.ts"
+      }
     ],
-    "author": "Miša <ibull37@gmail.com>",
-    "license": "MIT",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/bulkmaker/directus-extension-import-from-url"
-    },
-    "homepage": "https://github.com/bulkmaker/directus-extension-import-from-url#readme",
-    "bugs": {
-        "url": "https://github.com/bulkmaker/directus-extension-import-from-url/issues"
-    },
-    "type": "module",
-    "directus:extension": {
-        "type": "bundle",
-        "path": {
-            "app": "dist/app.js",
-            "api": "dist/api.js"
-        },
-        "entries": [
-            {
-                "type": "endpoint",
-                "name": "import-from-url",
-                "source": "src/api/index.ts"
-            },
-            {
-                "type": "module",
-                "name": "import-module",
-                "source": "src/app/index.ts"
-            }
-        ],
-        "host": "^10.0.0 || ^11.0.0"
-    },
-    "scripts": {
-        "build": "directus-extension build",
-        "dev": "directus-extension build -w --no-minify"
-    },
-    "devDependencies": {
-        "@directus/extensions-sdk": "^12.0.1",
-        "@types/node": "^20.19.27",
-        "@types/papaparse": "^5.5.2",
-        "typescript": "^5.0.0",
-        "vue": "^3.4.0"
-    },
-    "dependencies": {
-        "axios": "^1.6.0",
-        "iconv-lite": "^0.6.3",
-        "papaparse": "^5.4.1",
-        "xlsx": "^0.18.5"
-    }
+    "host": "^10.0.0 || ^11.0.0"
+  },
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build -w --no-minify",
+    "prepare": "directus-extension build"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "iconv-lite": "^0.6.3",
+    "papaparse": "^5.4.1",
+    "xlsx": "^0.18.5",
+    "@directus/extensions-sdk": "^12.0.1",
+    "@types/node": "^20.19.27",
+    "@types/papaparse": "^5.5.2",
+    "typescript": "^5.0.0",
+    "vue": "^3.4.0"
+  }
 }
