@@ -47,18 +47,24 @@
   },
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build -w --no-minify",
-    "prepare": "directus-extension build"
+    "dev": "directus-extension build -w --no-minify"
   },
   "dependencies": {
     "axios": "^1.6.0",
     "iconv-lite": "^0.6.3",
     "papaparse": "^5.4.1",
-    "xlsx": "^0.18.5",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
     "@directus/extensions-sdk": "^12.0.1",
     "@types/node": "^20.19.27",
     "@types/papaparse": "^5.5.2",
     "typescript": "^5.0.0",
     "vue": "^3.4.0"
-  }
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ]
 }
